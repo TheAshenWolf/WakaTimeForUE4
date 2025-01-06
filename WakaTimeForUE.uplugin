@@ -10,7 +10,7 @@
 	"DocsURL": "https://github.com/TheAshenWolf/WakaTimeForUE",
 	"MarketplaceURL": "",
 	"SupportURL": "https://github.com/TheAshenWolf/WakaTimeForUE/issues",
-	"EngineVersion": "5.3.0",
+	"EngineVersion": "ANY_VERSION",
 	"EnabledByDefault": true,
 	"CanContainContent": false,
 	"IsBetaVersion": false,

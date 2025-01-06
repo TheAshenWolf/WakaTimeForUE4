@@ -84,7 +84,7 @@ public:
 	/// <param name="bFileSave"> whether to attach the file that is being worked on </param>
 	/// <param name="FilePath"> path to the current file that is being edited </param>
 	/// <param name="Activity"> activity being performed by the user while sending the heartbeat; e.g. coding, designing, debugging, etc. </param>
-	void SendHeartbeat(bool bFileSave, std::string FilePath, std::string Activity);
+	void SendHeartbeat(bool bFileSave, std::string Activity, std::string EntityType, FString Entity, std::string Language);
 
 
 	// Event methods
@@ -129,11 +129,27 @@ public:
 	void OnPrePieEnded(bool bIsSimulating);
 
 	/// <summary>
-	///	Event called when blueprint is compiled
+	///	Event called prior to blueprint compiling
 	/// </summary>
-	void OnBlueprintCompiled();
+	void OnBlueprintPreCompile(UBlueprint* Blueprint);
+	
+	/// <summary>
+	///	Event called when editor window is initialized
+	/// </summary>
+	void OnEditorInitialized(double TimeToInitializeEditor);
+
+	/// <summary>
+	///	Event called when asset window is opened
+	/// </summary>
+	void OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor);
+
+	/// <summary>
+	///	Event called when asset window is closed
+	/// </summary>
+	void OnAssetClosed(UObject* Asset, IAssetEditorInstance* AssetEditor);
 
 	TSharedPtr<FUICommandList> PluginCommands;
+	TArray<TSharedRef<FString>> OpenedBPs;
 };
 
 class FWakaCommands : public TCommands<FWakaCommands>

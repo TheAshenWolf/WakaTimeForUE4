@@ -11,6 +11,7 @@
 #include <activation.h>
 #include <fstream>
 
+#include "BlueprintEditorModule.h"
 #include "Interfaces/IPluginManager.h"
 #include "UObject/ObjectSaveContext.h"
 
@@ -20,8 +21,10 @@ using namespace std;
 
 // Global variables
 string GAPIKey("");
+string GAPIUrl("");
 string GBaseCommand("");
 string GUserProfile;
+string GProjectPath;
 string GWakatimeArchitecture;
 string GWakaCliVersion;
 
@@ -33,11 +36,16 @@ FDelegateHandle AddLevelToWorldHandle;
 FDelegateHandle PostSaveWorldHandle;
 FDelegateHandle GPostPieStartedHandle;
 FDelegateHandle GPrePieEndedHandle;
-FDelegateHandle BlueprintCompiledHandle;
+FDelegateHandle OnBlueprintPreCompileHandle;
+FDelegateHandle OnEditorInitializedHandle;
+FDelegateHandle OnAssetOpenedInEditorHandle;
+FDelegateHandle OnAssetClosedInEditorHandle;
 
 // UI Elements
 TSharedRef<SEditableTextBox> GAPIKeyBlock = SNew(SEditableTextBox)
 .Text(FText::FromString(FString(UTF8_TO_TCHAR(GAPIKey.c_str())))).MinDesiredWidth(500);
+TSharedRef<SEditableTextBox> GAPIUrlBlock = SNew(SEditableTextBox)
+.Text(FText::FromString(FString(UTF8_TO_TCHAR(GAPIUrl.c_str())))).MinDesiredWidth(500);
 TSharedRef<SWindow> SettingsWindow = SNew(SWindow);
 TSharedPtr<FSlateStyleSet> StyleSetInstance = nullptr;
 
@@ -49,10 +57,10 @@ void FWakaTimeForUEModule::StartupModule()
 {
 	AssignGlobalVariables();
 
+	FString WakatimeCliFilePath = FString(GUserProfile.c_str()) + TEXT("\\.wakatime\\") + FString(GWakaCliVersion.c_str());
+	
 	// testing for "wakatime-cli.exe" which is used by most IDEs
-	if (FWakaTimeHelpers::RunCmdCommand(
-		"where /r " + string(GUserProfile) + "\\.wakatime\\" + GWakaCliVersion,
-		true))
+	if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*WakatimeCliFilePath))
 	{
 		UE_LOG(LogWakaTime, Log, TEXT("Found IDE wakatime-cli"));
 		GBaseCommand = (string(GUserProfile) + "\\.wakatime\\" + GWakaCliVersion);
@@ -68,7 +76,7 @@ void FWakaTimeForUEModule::StartupModule()
 		{
 			FWakaTimeHelpers::RunCmdCommand("mkdir " + FolderPath, false, INFINITE);
 		}
-		DownloadWakatimeCli(string(GUserProfile) + "/.wakatime/wakatime-cli/" + GWakaCliVersion);
+		DownloadWakatimeCli(string(GUserProfile) + "\\.wakatime\\wakatime-cli\\" + GWakaCliVersion);
 	}
 	// TheAshenWolf(Wakatime-cli.exe is not in the path by default, which is why we have to use the user path)
 
@@ -79,7 +87,7 @@ void FWakaTimeForUEModule::StartupModule()
 		FSlateStyleRegistry::RegisterSlateStyle(*StyleSetInstance);
 	}
 
-	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
+	string ConfigFileDir = string(GUserProfile) + "\\.wakatime.cfg";
 	HandleStartupApiCheck(ConfigFileDir);
 
 	// Add Listeners
@@ -95,21 +103,11 @@ void FWakaTimeForUEModule::StartupModule()
 #else// TheAshenWolf(PostSaveWorld is deprecated as of UE5)
 	PostSaveWorldHandle = FEditorDelegates::PostSaveWorld.AddRaw(this, &FWakaTimeForUEModule::OnPostSaveWorld);
 #endif
-
-
-	
 	
 	GPostPieStartedHandle = FEditorDelegates::PostPIEStarted.AddRaw(this, &FWakaTimeForUEModule::OnPostPieStarted);
 	GPrePieEndedHandle = FEditorDelegates::PrePIEEnded.AddRaw(this, &FWakaTimeForUEModule::OnPrePieEnded);
-	if (GEditor)
-	{
-		BlueprintCompiledHandle = GEditor->OnBlueprintCompiled().AddRaw(
-			this, &FWakaTimeForUEModule::OnBlueprintCompiled);
-	}
-	else
-	{
-		UE_LOG(LogWakaTime, Error, TEXT("No GEditor present"));
-	}
+	
+	OnEditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddRaw(this, &FWakaTimeForUEModule::OnEditorInitialized);
 
 	FWakaCommands::Register();
 
@@ -148,9 +146,16 @@ void FWakaTimeForUEModule::ShutdownModule()
 #endif
 	FEditorDelegates::PostPIEStarted.Remove(GPostPieStartedHandle);
 	FEditorDelegates::PrePIEEnded.Remove(GPrePieEndedHandle);
+	
 	if (GEditor)
 	{
-		GEditor->OnBlueprintCompiled().Remove(BlueprintCompiledHandle);
+		GEditor->OnBlueprintPreCompile().Remove(OnBlueprintPreCompileHandle);
+
+		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		{
+			AssetEditorSubsystem->OnAssetOpenedInEditor().Remove(OnAssetOpenedInEditorHandle);
+			AssetEditorSubsystem->OnAssetClosedInEditor().Remove(OnAssetClosedInEditorHandle);
+		}
 	}
 }
 
@@ -181,12 +186,15 @@ void FWakaTimeForUEModule::AssignGlobalVariables()
 	WCHAR BufferW[256];
 	GWakatimeArchitecture = GetSystemWow64DirectoryW(BufferW, 256) == 0 ? "386" : "amd64";
 	GWakaCliVersion = "wakatime-cli-windows-" + GWakatimeArchitecture + ".exe";
+	
+	GProjectPath = TCHAR_TO_UTF8(*FPaths::ProjectDir().Replace(TEXT("/"), TEXT("\\")));
 }
 
 void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 {
 	string Line;
 	bool bFoundApiKey = false;
+	bool bFoundApiUrl = false;
 
 	if (!FWakaTimeHelpers::PathExists(ConfigFilePath))
 	// if there is no .wakatime.cfg, open the settings window straight up
@@ -203,15 +211,28 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 		{
 			GAPIKey = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the api key from the line);
 			GAPIKeyBlock.Get().SetText(FText::FromString(FString(UTF8_TO_TCHAR(GAPIKey.c_str()))));
-			ConfigFile.close();
 			bFoundApiKey = true;
-			break;
+		}
+
+		if (Line.find("api_url") != string::npos)
+		{
+			GAPIUrl = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the api key from the line);
+			GAPIUrlBlock.Get().SetText(FText::FromString(FString(UTF8_TO_TCHAR(GAPIUrl.c_str()))));
+			bFoundApiUrl = true;
 		}
 	}
+
+	ConfigFile.close();
 
 	if (!bFoundApiKey)
 	{
 		UE_LOG(LogWakaTime, Warning, TEXT("API key not found in config file"));
+		OpenSettingsWindow(); // if key was not found, open the settings
+	}
+
+	if (!bFoundApiUrl)
+	{
+		UE_LOG(LogWakaTime, Warning, TEXT("API url not found in config file"));
 		OpenSettingsWindow(); // if key was not found, open the settings
 	}
 }
@@ -239,7 +260,7 @@ void FWakaTimeForUEModule::DownloadWakatimeCli(string CliPath)
 	{
 		UE_LOG(LogWakaTime, Log, TEXT("Successfully downloaded wakatime-cli.zip"));
 		bool bSuccessUnzip = FWakaTimeHelpers::UnzipArchive(LocalZipFilePath,
-		                                                    string(GUserProfile) + "/.wakatime");
+		                                                    string(GUserProfile) + "\\.wakatime");
 
 		if (bSuccessUnzip) UE_LOG(LogWakaTime, Log, TEXT("Successfully extracted wakatime-cli."));
 	}
@@ -274,7 +295,6 @@ TSharedRef<FSlateStyleSet> FWakaTimeForUEModule::CreateToolbarIcon()
 	TSharedRef<FSlateStyleSet> Style = MakeShareable(new FSlateStyleSet("WakaTime2DStyle"));
 
 	FString ResourcesDirectory = IPluginManager::Get().FindPlugin(TEXT("WakaTimeForUE"))->GetBaseDir() + "/Resources";
-	UE_LOG(LogWakaTime, Log, TEXT("%s"), *ResourcesDirectory);
 
 	Style->SetContentRoot(ResourcesDirectory);
 	Style->Set("mainIcon", new FSlateImageBrush(ResourcesDirectory + "/Icon128.png", FVector2D(40, 40),
@@ -319,6 +339,19 @@ void FWakaTimeForUEModule::OpenSettingsWindow()
 			[
 				GAPIKeyBlock
 			]
+			+ SVerticalBox::Slot()
+			.HAlign(HAlign_Left)
+			.VAlign(VAlign_Top)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(TEXT("Your api url:"))).MinDesiredWidth(500)
+			]
+			+ SVerticalBox::Slot()
+				.HAlign(HAlign_Center)
+				.VAlign(VAlign_Center)
+			[
+				GAPIUrlBlock
+			]
 		]
 		+ SVerticalBox::Slot()
 		  .HAlign(HAlign_Center)
@@ -354,6 +387,9 @@ FReply FWakaTimeForUEModule::SaveData()
 	string APIKeyBase = TCHAR_TO_UTF8(*(GAPIKeyBlock.Get().GetText().ToString()));
 	GAPIKey = APIKeyBase.substr(APIKeyBase.find(" = ") + 1);
 
+	string APIUrlBase = TCHAR_TO_UTF8(*(GAPIUrlBlock.Get().GetText().ToString()));
+	GAPIUrl = APIUrlBase.substr(APIUrlBase.find(" = ") + 1);
+
 	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
 	fstream ConfigFile(ConfigFileDir);
 
@@ -363,6 +399,7 @@ FReply FWakaTimeForUEModule::SaveData()
 		// Pozitrone(Create the file if it does not exist) and write the data in it
 		ConfigFile << "[settings]" << '\n';
 		ConfigFile << "api_key = " << GAPIKey;
+		ConfigFile << "api_url = " << GAPIUrl;
 		ConfigFile.close();
 
 		SettingsWindow.Get().RequestDestroyWindow();
@@ -372,12 +409,17 @@ FReply FWakaTimeForUEModule::SaveData()
 	TArray<string> Data;
 	string TempLine;
 	bool bFoundKey = false;
+	bool bFoundUrl = false;
 	while (getline(ConfigFile, TempLine))
 	{
 		if (TempLine.find("api_key") != string::npos)
 		{
 			Data.Add("api_key = " + GAPIKey); // if key was found, add the rewritten value to the data set
 			bFoundKey = true;
+		} else if(TempLine.find("api_url") != string::npos)
+		{
+			Data.Add("api_url = " + GAPIUrl); // if key was found, add the rewritten value to the data set
+			bFoundUrl = true;
 		}
 		else
 		{
@@ -386,12 +428,13 @@ FReply FWakaTimeForUEModule::SaveData()
 	}
 	ConfigFile.close();
 
-	if (!bFoundKey)
+	if (!bFoundKey || !bFoundUrl)
 	{
 		// There is no key present, add it
 		ConfigFile.open(ConfigFileDir, fstream::out);
 		ConfigFile << "[settings]" << '\n';
 		ConfigFile << "api_key = " << GAPIKey;
+		ConfigFile << "api_url = " << GAPIUrl;
 		ConfigFile.close();
 	}
 	else
@@ -410,22 +453,26 @@ FReply FWakaTimeForUEModule::SaveData()
 }
 
 // Lifecycle methods
-void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string Activity)
+void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string Activity, string EntityType, FString Entity, string Language)
 {
 	UE_LOG(LogWakaTime, Log, TEXT("Sending Heartbeat"));
 
 	string Command = GBaseCommand;
 
-	Command += " --entity \"" + GetProjectName() + "\" ";
+	Command += " --config " + string(GUserProfile) + "\\.wakatime.cfg ";
+	Command += "--log-file " + string(GUserProfile) + "\\.wakatime\\wakatime.log ";
 
-	if (GAPIKey != "")
+	if(GAPIUrl != "")
 	{
-		Command += "--key " + GAPIKey + " ";
+		Command += "--api-url " + GAPIUrl + " ";
 	}
 
 	Command += "--project \"" + GetProjectName() + "\" ";
-	Command += "--entity-type \"app\" ";
-	Command += "--language \"Unreal Engine\" ";
+	Command += "--project-folder " + GProjectPath + " ";
+	string EntityStr = TCHAR_TO_UTF8(*Entity.Replace(TEXT("/"), TEXT("\\")));
+	Command += "--entity " + EntityStr + " ";
+	Command += "--entity-type \"" + EntityType + "\" ";
+	Command += "--language \"" + Language + "\" ";
 	Command += "--plugin \"unreal-wakatime/1.2.5\" "; // Update this with the plugin version from .uplugin (Unreal Plugin Settings) (Avoid Hardcoding it here) TODO
 	Command += "--category " + Activity + " ";
 
@@ -437,7 +484,7 @@ void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string
 	bool bSuccess = false;
 	try
 	{
-		bSuccess = FWakaTimeHelpers::RunCmdCommand(Command, false, INFINITE, true);
+		bSuccess = FWakaTimeHelpers::RunPowershellCommand(Command, false, INFINITE, true);
 	}
 	catch (int Err)
 	{
@@ -459,28 +506,28 @@ void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string
 // Event methods
 void FWakaTimeForUEModule::OnNewActorDropped(const TArray<UObject*>& Objects, const TArray<AActor*>& Actors)
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnDuplicateActorsEnd()
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnDeleteActorsEnd()
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnAddLevelToWorld(ULevel* Level)
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 #if ENGINE_MAJOR_VERSION == 5
 	void FWakaTimeForUEModule::OnPostSaveWorld(UWorld* World, FObjectPostSaveContext Context)
 	{
-		SendHeartbeat(true, GetProjectName(), "designing");
+		SendHeartbeat(true, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 #else
 	void FWakaTimeForUEModule::OnPostSaveWorld(uint32 SaveFlags, UWorld* World, bool bSucces)
@@ -491,19 +538,65 @@ void FWakaTimeForUEModule::OnAddLevelToWorld(ULevel* Level)
 
 void FWakaTimeForUEModule::OnPostPieStarted(bool bIsSimulating)
 {
-	SendHeartbeat(false, GetProjectName(), "debugging");
+	SendHeartbeat(false, "debugging", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnPrePieEnded(bool bIsSimulating)
 {
-	SendHeartbeat(true, GetProjectName(), "debugging");
+	SendHeartbeat(true, "debugging", "app", "Unreal Editor", "Unreal Editor");
 }
 
-void FWakaTimeForUEModule::OnBlueprintCompiled()
+void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 {
-	SendHeartbeat(true, GetProjectName(), "coding");
+	auto Found = OpenedBPs.ContainsByPredicate([Blueprint](const TSharedRef<FString>& BPName)
+		{
+			return *BPName == Blueprint->GetName();
+		});
+	
+	if(!Found) return;
+
+	FString PackageName = Blueprint->GetOutermost()->GetName();
+	FString FilePath = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+ 
+	SendHeartbeat(true, "coding", "file", TCHAR_TO_UTF8(*FilePath), "Blueprints");
 }
 
+void FWakaTimeForUEModule::OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor)
+{
+	if(!Asset->IsA<UBlueprint>()) return;
+	
+	OpenedBPs.Add(MakeShared<FString>(Asset->GetName()));
+}
+
+void FWakaTimeForUEModule::OnAssetClosed(UObject* Asset, IAssetEditorInstance* AssetEditor)
+{
+	if(!Asset->IsA<UBlueprint>()) return;
+	
+	OpenedBPs.RemoveAll([Asset](const TSharedRef<FString>& BPName)
+	{
+		return *BPName == Asset->GetName();
+	});
+}
+
+void FWakaTimeForUEModule::OnEditorInitialized(double TimeToInitializeEditor)
+{
+	if (GEditor)
+	{
+		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		{
+			OnAssetOpenedInEditorHandle = AssetEditorSubsystem->OnAssetOpenedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetOpened);
+			OnAssetClosedInEditorHandle = AssetEditorSubsystem->OnAssetClosedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetClosed);
+		}
+		
+		OnBlueprintPreCompileHandle = GEditor->OnBlueprintPreCompile().AddRaw(this, &FWakaTimeForUEModule::OnBlueprintPreCompile);
+	}
+	else
+	{
+		UE_LOG(LogWakaTime, Error, TEXT("No GEditor present"));
+	}
+
+	FEditorDelegates::OnEditorInitialized.Remove(OnEditorInitializedHandle);
+}
 
 #undef LOCTEXT_NAMESPACE
 
