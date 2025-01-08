@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <map>
 #include <Runtime/SlateCore/Public/Styling/SlateStyle.h>
 #include "EditorStyleSet.h"
 
@@ -85,7 +86,7 @@ public:
 	/// </summary>
 	FReply SaveData();
 
-	bool UpdateIniEntry(TMap<FString, FString>& Data, FString Key, FString Value);
+	void UpdateIniEntry(bool& bIsDirty, std::map<std::string, std::string>& Data, std::string Key, std::string Value);
 
 
 	// Lifecycle methods

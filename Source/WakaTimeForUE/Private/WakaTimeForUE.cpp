@@ -431,7 +431,7 @@ FReply FWakaTimeForUEModule::SaveData()
 		return FReply::Handled();
 	}
 
-	TMap<FString, FString> Data;
+	map<string, string> Data;
 	
 	string TempLine;
 	while (getline(ConfigFile, TempLine)) // RedKitsune(Turn entire ini file into TMap);
@@ -442,14 +442,14 @@ FReply FWakaTimeForUEModule::SaveData()
 		string Key = TempLine.substr(0, Pos);
 		string Value = TempLine.substr(Pos + std::strlen(" = "));
 
-		Data.Add(UTF8_TO_TCHAR(Key.c_str()), UTF8_TO_TCHAR(Value.c_str()));
+		Data.insert(std::make_pair(Key, Value));
 	}
 	ConfigFile.close();
 
 	bool bIsDirty = false;
 	
-	bIsDirty = UpdateIniEntry(Data, "api_key", UTF8_TO_TCHAR(GAPIKey.c_str()));
-	bIsDirty = UpdateIniEntry(Data, "api_url", UTF8_TO_TCHAR(GAPIUrl.c_str()));
+	UpdateIniEntry(bIsDirty, Data, "api_key", GAPIKey);
+	UpdateIniEntry(bIsDirty, Data, "api_url", GAPIUrl);
 	
 	if(bIsDirty)
 	{
@@ -461,7 +461,7 @@ FReply FWakaTimeForUEModule::SaveData()
 		
 		for(auto kvp : Data)
 		{
-			ConfigFile << TCHAR_TO_UTF8(*kvp.Key) << " = " << TCHAR_TO_UTF8(*kvp.Value) << '\n';
+			ConfigFile << kvp.first << " = " << kvp.second << '\n';
 		}
 
 		ConfigFile.close();
@@ -471,26 +471,26 @@ FReply FWakaTimeForUEModule::SaveData()
 	return FReply::Handled();
 }
 
-bool FWakaTimeForUEModule::UpdateIniEntry(TMap<FString, FString>& Data, FString Key, FString Value)
+void FWakaTimeForUEModule::UpdateIniEntry(bool& bIsDirty, map<string, string>& Data, string Key, string Value)
 {
-	if(Value.IsEmpty())
+	if(Value.empty())
 	{
-		if(Data.Contains(Key))
+		if(Data.contains(Key))
 		{
-			Data.Remove(Key);
-			return true;
-		} else return false;
+			Data.erase(Key);
+			bIsDirty =  true;
+		}
 	} else
 	{
-		if(!Data.Contains(Key))
+		if(!Data.contains(Key))
 		{
-			Data.Add(Key, Value);
-			return true;
-		} else if(!Data[Key].Equals(Value))
+			Data.insert(std::make_pair(Key, Value));
+			bIsDirty =  true;
+		} else if(!Data[Key].compare(Value))
 		{
 			Data[Key] = Value;
-			return true;
-		} else return false;
+			bIsDirty =  true;
+		}
 	}
 }
 
