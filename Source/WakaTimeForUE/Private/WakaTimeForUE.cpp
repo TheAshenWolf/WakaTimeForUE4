@@ -117,7 +117,7 @@ void FWakaTimeForUEModule::StartupModule()
 	// This handles the WakaTime settings button in the top bar
 	PluginCommands->MapAction(
 		FWakaCommands::Get().WakaTimeSettingsCommand,
-		FExecuteAction::CreateRaw(this, &FWakaTimeForUEModule::OpenSettingsWindow)
+		FExecuteAction::CreateRaw(this, &FWakaTimeForUEModule::OpenSettingsWindowFromUI)
 	);
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
@@ -196,10 +196,6 @@ void FWakaTimeForUEModule::AssignGlobalVariables()
 
 void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 {
-	string Line;
-	bool bFoundApiKey = false;
-	bool bFoundApiUrl = false;
-
 	if (!FWakaTimeHelpers::PathExists(ConfigFilePath))
 	// if there is no .wakatime.cfg, open the settings window straight up
 	{
@@ -207,6 +203,26 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 		return;
 	}
 
+	bool bFoundApiKey = false;
+	bool bFoundApiUrl = false;
+	ReadConfig(ConfigFilePath, bFoundApiKey, bFoundApiUrl);
+
+	if (!bFoundApiKey)
+	{
+		UE_LOG(LogWakaTime, Warning, TEXT("API key not found in config file"));
+		OpenSettingsWindow(); // if key was not found, open the settings
+	}
+
+	if (!bFoundApiUrl)
+	{
+		UE_LOG(LogWakaTime, Warning, TEXT("API url not found in config file"));
+	}
+}
+
+void FWakaTimeForUEModule::ReadConfig(string ConfigFilePath, bool& bFoundApiKey, bool& bFoundApiUrl)
+{
+	string Line;
+	
 	fstream ConfigFile(ConfigFilePath);
 
 	while (getline(ConfigFile, Line))
@@ -220,24 +236,23 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 
 		if (Line.find("api_url") != string::npos)
 		{
-			GAPIUrl = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the api key from the line);
+			GAPIUrl = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the url key from the line);
 			GAPIUrlBlock.Get().SetText(FText::FromString(FString(UTF8_TO_TCHAR(GAPIUrl.c_str()))));
 			bFoundApiUrl = true;
 		}
 	}
 
+	if(!bFoundApiKey)
+	{
+		GAPIKeyBlock.Get().SetText(FText::GetEmpty());
+	}
+
+	if(!bFoundApiUrl)
+	{
+		GAPIUrlBlock.Get().SetText(FText::GetEmpty());
+	}
+
 	ConfigFile.close();
-
-	if (!bFoundApiKey)
-	{
-		UE_LOG(LogWakaTime, Warning, TEXT("API key not found in config file"));
-		OpenSettingsWindow(); // if key was not found, open the settings
-	}
-
-	if (!bFoundApiUrl)
-	{
-		UE_LOG(LogWakaTime, Warning, TEXT("API url not found in config file"));
-	}
 }
 
 void FWakaTimeForUEModule::DownloadWakatimeCli(string CliPath)
@@ -315,6 +330,15 @@ void FWakaTimeForUEModule::AddToolbarButton(FToolBarBuilder& Builder)
 	                         Icon, NAME_None);
 }
 
+void FWakaTimeForUEModule::OpenSettingsWindowFromUI()
+{
+	bool bFoundApiKey = false;
+	bool bFoundApiUrl = false;
+	ReadConfig(string(GUserProfile) + "\\.wakatime.cfg", bFoundApiKey, bFoundApiUrl);
+
+	OpenSettingsWindow();
+}
+
 void FWakaTimeForUEModule::OpenSettingsWindow()
 {
 	SettingsWindow = SNew(SWindow)
@@ -385,16 +409,8 @@ void FWakaTimeForUEModule::OpenSettingsWindow()
 
 FReply FWakaTimeForUEModule::SaveData()
 {
-	UE_LOG(LogWakaTime, Log, TEXT("Saving settings"));
-
-	string APIKeyBase = TCHAR_TO_UTF8(*(GAPIKeyBlock.Get().GetText().ToString()));
-	GAPIKey = APIKeyBase.substr(APIKeyBase.find(" = ") + 1);
-
-	string APIUrlBase = TCHAR_TO_UTF8(*(GAPIUrlBlock.Get().GetText().ToString()));
-	if(!APIUrlBase.empty())
-	{
-		GAPIUrl = APIUrlBase.substr(APIUrlBase.find(" = ") + 1);
-	}
+	GAPIKey = TCHAR_TO_UTF8(*(GAPIKeyBlock.Get().GetText().ToString()));
+	GAPIUrl = TCHAR_TO_UTF8(*(GAPIUrlBlock.Get().GetText().ToString()));
 
 	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
 	fstream ConfigFile(ConfigFileDir);
@@ -415,53 +431,67 @@ FReply FWakaTimeForUEModule::SaveData()
 		return FReply::Handled();
 	}
 
-	TArray<string> Data;
+	TMap<FString, FString> Data;
+	
 	string TempLine;
-	bool bFoundKey = false;
-	bool bFoundUrl = false;
-	while (getline(ConfigFile, TempLine))
+	while (getline(ConfigFile, TempLine)) // RedKitsune(Turn entire ini file into TMap);
 	{
-		if (TempLine.find("api_key") != string::npos)
-		{
-			Data.Add("api_key = " + GAPIKey); // if key was found, add the rewritten value to the data set
-			bFoundKey = true;
-		} else if(TempLine.find("api_url") != string::npos)
-		{
-			Data.Add("api_url = " + GAPIUrl); // if key was found, add the rewritten value to the data set
-			bFoundUrl = true;
-		}
-		else
-		{
-			Data.Add(TempLine); // If key was not found, add the according line to the data set
-		}
+		if(TempLine.find("[settings]") != string::npos) continue;
+
+		size_t Pos = TempLine.find(" = ");
+		string Key = TempLine.substr(0, Pos);
+		string Value = TempLine.substr(Pos + std::strlen(" = "));
+
+		Data.Add(UTF8_TO_TCHAR(Key.c_str()), UTF8_TO_TCHAR(Value.c_str()));
 	}
 	ConfigFile.close();
 
-	if (!bFoundKey)
+	bool bIsDirty = false;
+	
+	bIsDirty = UpdateIniEntry(Data, "api_key", UTF8_TO_TCHAR(GAPIKey.c_str()));
+	bIsDirty = UpdateIniEntry(Data, "api_url", UTF8_TO_TCHAR(GAPIUrl.c_str()));
+	
+	if(bIsDirty)
 	{
-		// There is no key present, add it
+		UE_LOG(LogWakaTime, Log, TEXT("Saving settings"));
+		
 		ConfigFile.open(ConfigFileDir, fstream::out);
+
 		ConfigFile << "[settings]" << '\n';
-		ConfigFile << "api_key = " << GAPIKey;
-		if(!bFoundUrl && !GAPIUrl.empty())
+		
+		for(auto kvp : Data)
 		{
-			ConfigFile << "api_url = " << GAPIUrl;
+			ConfigFile << TCHAR_TO_UTF8(*kvp.Key) << " = " << TCHAR_TO_UTF8(*kvp.Value) << '\n';
 		}
-		ConfigFile.close();
-	}
-	else
-	{
-		// Rewrite the file with the new override
-		ConfigFile.open(ConfigFileDir, fstream::out);
-		for (int Index = 0; Index < Data.Num(); Index++)
-		{
-			ConfigFile << Data[Index] << endl;
-		}
+
 		ConfigFile.close();
 	}
 
 	SettingsWindow.Get().RequestDestroyWindow();
 	return FReply::Handled();
+}
+
+bool FWakaTimeForUEModule::UpdateIniEntry(TMap<FString, FString>& Data, FString Key, FString Value)
+{
+	if(Value.IsEmpty())
+	{
+		if(Data.Contains(Key))
+		{
+			Data.Remove(Key);
+			return true;
+		} else return false;
+	} else
+	{
+		if(!Data.Contains(Key))
+		{
+			Data.Add(Key, Value);
+			return true;
+		} else if(!Data[Key].Equals(Value))
+		{
+			Data[Key] = Value;
+			return true;
+		} else return false;
+	}
 }
 
 // Lifecycle methods

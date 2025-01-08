@@ -38,6 +38,12 @@ public:
 	void HandleStartupApiCheck(std::string ConfigFilePath);
 
 	/// <summary>
+	///	Checks whether the wakatime config file exists and includes the api_key
+	/// </summary>
+	/// <param name="ConfigFilePath"> Path to the config file directory</param>
+	void ReadConfig(std::string ConfigFilePath, bool& bFoundApiKey, bool& bFoundApiUrl);
+
+	/// <summary>
 	///	Checks if Wakatime exists, if not, downloads it using Powershell
 	/// </summary>
 	/// <param name="CliPath"> Path to the wakatime exe file </param>
@@ -64,7 +70,12 @@ public:
 	void AddToolbarButton(FToolBarBuilder& Builder);
 
 	/// <summary>
-	///	Called when the toolbar icon is clicked; Opens the Slate window
+	///	Called when the toolbar icon is clicked; Reads config and opens the Slate window
+	/// </summary>
+	void OpenSettingsWindowFromUI();
+	
+	/// <summary>
+	///	Opens the Slate window
 	/// </summary>
 	void OpenSettingsWindow();
 
@@ -73,6 +84,8 @@ public:
 	///	Saves the entered api key into the wakatime.cfg file
 	/// </summary>
 	FReply SaveData();
+
+	bool UpdateIniEntry(TMap<FString, FString>& Data, FString Key, FString Value);
 
 
 	// Lifecycle methods
