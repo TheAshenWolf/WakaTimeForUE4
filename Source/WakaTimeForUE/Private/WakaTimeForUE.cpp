@@ -25,6 +25,7 @@ string GAPIUrl("");
 string GBaseCommand("");
 string GUserProfile;
 string GProjectPath;
+string GPluginVersion;
 string GWakatimeArchitecture;
 string GWakaCliVersion;
 
@@ -188,6 +189,9 @@ void FWakaTimeForUEModule::AssignGlobalVariables()
 	GWakaCliVersion = "wakatime-cli-windows-" + GWakatimeArchitecture + ".exe";
 	
 	GProjectPath = TCHAR_TO_UTF8(*FPaths::ProjectDir().Replace(TEXT("/"), TEXT("\\")));
+	
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("WakaTimeForUE"));
+	GPluginVersion = TCHAR_TO_UTF8(*Plugin.Get()->GetDescriptor().VersionName);
 }
 
 void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
@@ -233,7 +237,6 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 	if (!bFoundApiUrl)
 	{
 		UE_LOG(LogWakaTime, Warning, TEXT("API url not found in config file"));
-		OpenSettingsWindow(); // if key was not found, open the settings
 	}
 }
 
@@ -266,7 +269,7 @@ void FWakaTimeForUEModule::DownloadWakatimeCli(string CliPath)
 	}
 	else
 	{
-		UE_LOG(LogWakaTime, Error, TEXT("Error downloading python. Please, install it manually."));
+		UE_LOG(LogWakaTime, Error, TEXT("Error downloading wakatime-cli. Please, install it manually."));
 	}
 }
 
@@ -388,7 +391,10 @@ FReply FWakaTimeForUEModule::SaveData()
 	GAPIKey = APIKeyBase.substr(APIKeyBase.find(" = ") + 1);
 
 	string APIUrlBase = TCHAR_TO_UTF8(*(GAPIUrlBlock.Get().GetText().ToString()));
-	GAPIUrl = APIUrlBase.substr(APIUrlBase.find(" = ") + 1);
+	if(!APIUrlBase.empty())
+	{
+		GAPIUrl = APIUrlBase.substr(APIUrlBase.find(" = ") + 1);
+	}
 
 	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
 	fstream ConfigFile(ConfigFileDir);
@@ -399,7 +405,10 @@ FReply FWakaTimeForUEModule::SaveData()
 		// Pozitrone(Create the file if it does not exist) and write the data in it
 		ConfigFile << "[settings]" << '\n';
 		ConfigFile << "api_key = " << GAPIKey;
-		ConfigFile << "api_url = " << GAPIUrl;
+		if(!GAPIUrl.empty())
+		{
+			ConfigFile << "api_url = " << GAPIUrl;
+		}
 		ConfigFile.close();
 
 		SettingsWindow.Get().RequestDestroyWindow();
@@ -428,13 +437,16 @@ FReply FWakaTimeForUEModule::SaveData()
 	}
 	ConfigFile.close();
 
-	if (!bFoundKey || !bFoundUrl)
+	if (!bFoundKey)
 	{
 		// There is no key present, add it
 		ConfigFile.open(ConfigFileDir, fstream::out);
 		ConfigFile << "[settings]" << '\n';
 		ConfigFile << "api_key = " << GAPIKey;
-		ConfigFile << "api_url = " << GAPIUrl;
+		if(!bFoundUrl && !GAPIUrl.empty())
+		{
+			ConfigFile << "api_url = " << GAPIUrl;
+		}
 		ConfigFile.close();
 	}
 	else
@@ -473,7 +485,7 @@ void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string Activity, string
 	Command += "--entity " + EntityStr + " ";
 	Command += "--entity-type \"" + EntityType + "\" ";
 	Command += "--language \"" + Language + "\" ";
-	Command += "--plugin \"unreal-wakatime/1.2.5\" "; // Update this with the plugin version from .uplugin (Unreal Plugin Settings) (Avoid Hardcoding it here) TODO
+	Command += "--plugin \"unreal-wakatime/" + GPluginVersion + "\" ";
 	Command += "--category " + Activity + " ";
 
 	if (bFileSave)
@@ -532,7 +544,7 @@ void FWakaTimeForUEModule::OnAddLevelToWorld(ULevel* Level)
 #else
 	void FWakaTimeForUEModule::OnPostSaveWorld(uint32 SaveFlags, UWorld* World, bool bSucces)
 	{
-		SendHeartbeat(true, GetProjectName(), "designing");
+		SendHeartbeat(true, "designing", "app", "Unreal Editor", "Unreal Editor");
 	}
 #endif
 
