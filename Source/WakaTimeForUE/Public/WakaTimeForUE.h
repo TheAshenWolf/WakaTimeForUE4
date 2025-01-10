@@ -152,6 +152,7 @@ public:
 	/// </summary>
 	void OnEditorInitialized(double TimeToInitializeEditor);
 
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 	/// <summary>
 	///	Event called when asset window is opened
 	/// </summary>
@@ -161,9 +162,12 @@ public:
 	///	Event called when asset window is closed
 	/// </summary>
 	void OnAssetClosed(UObject* Asset, IAssetEditorInstance* AssetEditor);
+#endif
 
 	TSharedPtr<FUICommandList> PluginCommands;
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 	TArray<TSharedRef<FString>> OpenedBPs;
+#endif
 };
 
 class FWakaCommands : public TCommands<FWakaCommands>

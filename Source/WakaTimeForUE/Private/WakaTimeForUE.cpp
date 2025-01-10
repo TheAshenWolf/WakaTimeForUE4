@@ -39,8 +39,10 @@ FDelegateHandle GPostPieStartedHandle;
 FDelegateHandle GPrePieEndedHandle;
 FDelegateHandle OnBlueprintPreCompileHandle;
 FDelegateHandle OnEditorInitializedHandle;
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 FDelegateHandle OnAssetOpenedInEditorHandle;
 FDelegateHandle OnAssetClosedInEditorHandle;
+#endif
 
 // UI Elements
 TSharedRef<SEditableTextBox> GAPIKeyBlock = SNew(SEditableTextBox)
@@ -152,11 +154,13 @@ void FWakaTimeForUEModule::ShutdownModule()
 	{
 		GEditor->OnBlueprintPreCompile().Remove(OnBlueprintPreCompileHandle);
 
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 		{
 			AssetEditorSubsystem->OnAssetOpenedInEditor().Remove(OnAssetOpenedInEditorHandle);
 			AssetEditorSubsystem->OnAssetClosedInEditor().Remove(OnAssetClosedInEditorHandle);
 		}
+#endif
 	}
 }
 
@@ -590,6 +594,7 @@ void FWakaTimeForUEModule::OnPrePieEnded(bool bIsSimulating)
 
 void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 {
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 	auto Found = OpenedBPs.ContainsByPredicate([Blueprint](const TSharedRef<FString>& BPName)
 		{
 			return *BPName == Blueprint->GetName();
@@ -601,8 +606,12 @@ void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 	FString FilePath = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
  
 	SendHeartbeat(true, "coding", "file", TCHAR_TO_UTF8(*FilePath), "Blueprints");
+#else
+	SendHeartbeat(true, "coding", "app", "Unreal Editor", "Blueprints");
+#endif
 }
 
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 void FWakaTimeForUEModule::OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor)
 {
 	if(!Asset->IsA<UBlueprint>()) return;
@@ -619,16 +628,19 @@ void FWakaTimeForUEModule::OnAssetClosed(UObject* Asset, IAssetEditorInstance* A
 		return *BPName == Asset->GetName();
 	});
 }
+#endif
 
 void FWakaTimeForUEModule::OnEditorInitialized(double TimeToInitializeEditor)
 {
 	if (GEditor)
 	{
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 		{
 			OnAssetOpenedInEditorHandle = AssetEditorSubsystem->OnAssetOpenedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetOpened);
 			OnAssetClosedInEditorHandle = AssetEditorSubsystem->OnAssetClosedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetClosed);
 		}
+#endif
 		
 		OnBlueprintPreCompileHandle = GEditor->OnBlueprintPreCompile().AddRaw(this, &FWakaTimeForUEModule::OnBlueprintPreCompile);
 	}
