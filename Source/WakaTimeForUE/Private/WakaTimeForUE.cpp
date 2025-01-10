@@ -39,7 +39,7 @@ FDelegateHandle GPostPieStartedHandle;
 FDelegateHandle GPrePieEndedHandle;
 FDelegateHandle OnBlueprintPreCompileHandle;
 FDelegateHandle OnEditorInitializedHandle;
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
 FDelegateHandle OnAssetOpenedInEditorHandle;
 FDelegateHandle OnAssetClosedInEditorHandle;
 #endif
@@ -154,7 +154,7 @@ void FWakaTimeForUEModule::ShutdownModule()
 	{
 		GEditor->OnBlueprintPreCompile().Remove(OnBlueprintPreCompileHandle);
 
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 		{
 			AssetEditorSubsystem->OnAssetOpenedInEditor().Remove(OnAssetOpenedInEditorHandle);
@@ -594,7 +594,7 @@ void FWakaTimeForUEModule::OnPrePieEnded(bool bIsSimulating)
 
 void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 {
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
 	auto Found = OpenedBPs.ContainsByPredicate([Blueprint](const TSharedRef<FString>& BPName)
 		{
 			return *BPName == Blueprint->GetName();
@@ -611,7 +611,7 @@ void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 #endif
 }
 
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
 void FWakaTimeForUEModule::OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor)
 {
 	if(!Asset->IsA<UBlueprint>()) return;
@@ -634,7 +634,7 @@ void FWakaTimeForUEModule::OnEditorInitialized(double TimeToInitializeEditor)
 {
 	if (GEditor)
 	{
-#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
 		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
 		{
 			OnAssetOpenedInEditorHandle = AssetEditorSubsystem->OnAssetOpenedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetOpened);
