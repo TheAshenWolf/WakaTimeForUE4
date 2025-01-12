@@ -3,6 +3,8 @@
 #include <activation.h>
 #include <string>
 
+#include "WakaTimeForUE.h"
+
 bool FWakaTimeHelpers::PathExists(const std::string& Path)
 {
 	struct stat Buffer;
@@ -59,7 +61,7 @@ bool FWakaTimeHelpers::RunCommand(std::string CommandToRun, bool bRequireNonZero
 	}
 
 	WaitForSingleObject(Process_Information.hProcess, WaitMs);
-
+	
 	CloseHandle(Process_Information.hThread);
 	CloseHandle(Process_Information.hProcess);
 
@@ -81,8 +83,7 @@ bool FWakaTimeHelpers::RunCmdCommand(std::string CommandToRun, bool bRequireNonZ
                                      std::string Directory)
 {
 	return RunCommand(CommandToRun, bRequireNonZeroProcess, "C:\\Windows\\System32\\cmd.exe", WaitMs,
-	                  bRunPure,
-	                  Directory);
+	                  bRunPure, Directory);
 }
 
 

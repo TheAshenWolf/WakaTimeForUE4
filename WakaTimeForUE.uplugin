@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
 	"Version": 10205,
-	"VersionName": "1.2.5",
+	"VersionName": "1.2.6",
 	"FriendlyName": "WakaTimeForUE",
 	"Description": "WakaTime plugin for Unreal Engine. Contributions are welcome",
 	"Category": "Other",
@@ -10,7 +10,7 @@
 	"DocsURL": "https://github.com/TheAshenWolf/WakaTimeForUE",
 	"MarketplaceURL": "",
 	"SupportURL": "https://github.com/TheAshenWolf/WakaTimeForUE/issues",
-	"EngineVersion": "5.3.0",
+	"EngineVersion": "ANY_VERSION",
 	"EnabledByDefault": true,
 	"CanContainContent": false,
 	"IsBetaVersion": false,

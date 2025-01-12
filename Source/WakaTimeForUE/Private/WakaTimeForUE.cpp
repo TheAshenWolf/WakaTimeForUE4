@@ -11,6 +11,7 @@
 #include <activation.h>
 #include <fstream>
 
+#include "BlueprintEditorModule.h"
 #include "Interfaces/IPluginManager.h"
 #include "UObject/ObjectSaveContext.h"
 
@@ -20,8 +21,11 @@ using namespace std;
 
 // Global variables
 string GAPIKey("");
+string GAPIUrl("");
 string GBaseCommand("");
 string GUserProfile;
+string GProjectPath;
+string GPluginVersion;
 string GWakatimeArchitecture;
 string GWakaCliVersion;
 
@@ -33,11 +37,18 @@ FDelegateHandle AddLevelToWorldHandle;
 FDelegateHandle PostSaveWorldHandle;
 FDelegateHandle GPostPieStartedHandle;
 FDelegateHandle GPrePieEndedHandle;
-FDelegateHandle BlueprintCompiledHandle;
+FDelegateHandle OnBlueprintPreCompileHandle;
+FDelegateHandle OnEditorInitializedHandle;
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+FDelegateHandle OnAssetOpenedInEditorHandle;
+FDelegateHandle OnAssetClosedInEditorHandle;
+#endif
 
 // UI Elements
 TSharedRef<SEditableTextBox> GAPIKeyBlock = SNew(SEditableTextBox)
 .Text(FText::FromString(FString(UTF8_TO_TCHAR(GAPIKey.c_str())))).MinDesiredWidth(500);
+TSharedRef<SEditableTextBox> GAPIUrlBlock = SNew(SEditableTextBox)
+.Text(FText::FromString(FString(UTF8_TO_TCHAR(GAPIUrl.c_str())))).MinDesiredWidth(500);
 TSharedRef<SWindow> SettingsWindow = SNew(SWindow);
 TSharedPtr<FSlateStyleSet> StyleSetInstance = nullptr;
 
@@ -49,10 +60,10 @@ void FWakaTimeForUEModule::StartupModule()
 {
 	AssignGlobalVariables();
 
+	FString WakatimeCliFilePath = FString(GUserProfile.c_str()) + TEXT("\\.wakatime\\") + FString(GWakaCliVersion.c_str());
+	
 	// testing for "wakatime-cli.exe" which is used by most IDEs
-	if (FWakaTimeHelpers::RunCmdCommand(
-		"where /r " + string(GUserProfile) + "\\.wakatime\\" + GWakaCliVersion,
-		true))
+	if (FPlatformFileManager::Get().GetPlatformFile().FileExists(*WakatimeCliFilePath))
 	{
 		UE_LOG(LogWakaTime, Log, TEXT("Found IDE wakatime-cli"));
 		GBaseCommand = (string(GUserProfile) + "\\.wakatime\\" + GWakaCliVersion);
@@ -68,7 +79,7 @@ void FWakaTimeForUEModule::StartupModule()
 		{
 			FWakaTimeHelpers::RunCmdCommand("mkdir " + FolderPath, false, INFINITE);
 		}
-		DownloadWakatimeCli(string(GUserProfile) + "/.wakatime/wakatime-cli/" + GWakaCliVersion);
+		DownloadWakatimeCli(string(GUserProfile) + "\\.wakatime\\wakatime-cli\\" + GWakaCliVersion);
 	}
 	// TheAshenWolf(Wakatime-cli.exe is not in the path by default, which is why we have to use the user path)
 
@@ -79,7 +90,7 @@ void FWakaTimeForUEModule::StartupModule()
 		FSlateStyleRegistry::RegisterSlateStyle(*StyleSetInstance);
 	}
 
-	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
+	string ConfigFileDir = string(GUserProfile) + "\\.wakatime.cfg";
 	HandleStartupApiCheck(ConfigFileDir);
 
 	// Add Listeners
@@ -95,21 +106,11 @@ void FWakaTimeForUEModule::StartupModule()
 #else// TheAshenWolf(PostSaveWorld is deprecated as of UE5)
 	PostSaveWorldHandle = FEditorDelegates::PostSaveWorld.AddRaw(this, &FWakaTimeForUEModule::OnPostSaveWorld);
 #endif
-
-
-	
 	
 	GPostPieStartedHandle = FEditorDelegates::PostPIEStarted.AddRaw(this, &FWakaTimeForUEModule::OnPostPieStarted);
 	GPrePieEndedHandle = FEditorDelegates::PrePIEEnded.AddRaw(this, &FWakaTimeForUEModule::OnPrePieEnded);
-	if (GEditor)
-	{
-		BlueprintCompiledHandle = GEditor->OnBlueprintCompiled().AddRaw(
-			this, &FWakaTimeForUEModule::OnBlueprintCompiled);
-	}
-	else
-	{
-		UE_LOG(LogWakaTime, Error, TEXT("No GEditor present"));
-	}
+	
+	OnEditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddRaw(this, &FWakaTimeForUEModule::OnEditorInitialized);
 
 	FWakaCommands::Register();
 
@@ -118,7 +119,7 @@ void FWakaTimeForUEModule::StartupModule()
 	// This handles the WakaTime settings button in the top bar
 	PluginCommands->MapAction(
 		FWakaCommands::Get().WakaTimeSettingsCommand,
-		FExecuteAction::CreateRaw(this, &FWakaTimeForUEModule::OpenSettingsWindow)
+		FExecuteAction::CreateRaw(this, &FWakaTimeForUEModule::OpenSettingsWindowFromUI)
 	);
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
@@ -148,9 +149,18 @@ void FWakaTimeForUEModule::ShutdownModule()
 #endif
 	FEditorDelegates::PostPIEStarted.Remove(GPostPieStartedHandle);
 	FEditorDelegates::PrePIEEnded.Remove(GPrePieEndedHandle);
+	
 	if (GEditor)
 	{
-		GEditor->OnBlueprintCompiled().Remove(BlueprintCompiledHandle);
+		GEditor->OnBlueprintPreCompile().Remove(OnBlueprintPreCompileHandle);
+
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		{
+			AssetEditorSubsystem->OnAssetOpenedInEditor().Remove(OnAssetOpenedInEditorHandle);
+			AssetEditorSubsystem->OnAssetClosedInEditor().Remove(OnAssetClosedInEditorHandle);
+		}
+#endif
 	}
 }
 
@@ -181,13 +191,15 @@ void FWakaTimeForUEModule::AssignGlobalVariables()
 	WCHAR BufferW[256];
 	GWakatimeArchitecture = GetSystemWow64DirectoryW(BufferW, 256) == 0 ? "386" : "amd64";
 	GWakaCliVersion = "wakatime-cli-windows-" + GWakatimeArchitecture + ".exe";
+	
+	GProjectPath = TCHAR_TO_UTF8(*FPaths::ProjectDir().Replace(TEXT("/"), TEXT("\\")));
+	
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("WakaTimeForUE"));
+	GPluginVersion = TCHAR_TO_UTF8(*Plugin.Get()->GetDescriptor().VersionName);
 }
 
 void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 {
-	string Line;
-	bool bFoundApiKey = false;
-
 	if (!FWakaTimeHelpers::PathExists(ConfigFilePath))
 	// if there is no .wakatime.cfg, open the settings window straight up
 	{
@@ -195,6 +207,26 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 		return;
 	}
 
+	bool bFoundApiKey = false;
+	bool bFoundApiUrl = false;
+	ReadConfig(ConfigFilePath, bFoundApiKey, bFoundApiUrl);
+
+	if (!bFoundApiKey)
+	{
+		UE_LOG(LogWakaTime, Warning, TEXT("API key not found in config file"));
+		OpenSettingsWindow(); // if key was not found, open the settings
+	}
+
+	if (!bFoundApiUrl)
+	{
+		UE_LOG(LogWakaTime, Warning, TEXT("API url not found in config file"));
+	}
+}
+
+void FWakaTimeForUEModule::ReadConfig(string ConfigFilePath, bool& bFoundApiKey, bool& bFoundApiUrl)
+{
+	string Line;
+	
 	fstream ConfigFile(ConfigFilePath);
 
 	while (getline(ConfigFile, Line))
@@ -203,17 +235,28 @@ void FWakaTimeForUEModule::HandleStartupApiCheck(string ConfigFilePath)
 		{
 			GAPIKey = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the api key from the line);
 			GAPIKeyBlock.Get().SetText(FText::FromString(FString(UTF8_TO_TCHAR(GAPIKey.c_str()))));
-			ConfigFile.close();
 			bFoundApiKey = true;
-			break;
+		}
+
+		if (Line.find("api_url") != string::npos)
+		{
+			GAPIUrl = Line.substr(Line.find(" = ") + 3); // Pozitrone(Extract only the url key from the line);
+			GAPIUrlBlock.Get().SetText(FText::FromString(FString(UTF8_TO_TCHAR(GAPIUrl.c_str()))));
+			bFoundApiUrl = true;
 		}
 	}
 
-	if (!bFoundApiKey)
+	if(!bFoundApiKey)
 	{
-		UE_LOG(LogWakaTime, Warning, TEXT("API key not found in config file"));
-		OpenSettingsWindow(); // if key was not found, open the settings
+		GAPIKeyBlock.Get().SetText(FText::GetEmpty());
 	}
+
+	if(!bFoundApiUrl)
+	{
+		GAPIUrlBlock.Get().SetText(FText::GetEmpty());
+	}
+
+	ConfigFile.close();
 }
 
 void FWakaTimeForUEModule::DownloadWakatimeCli(string CliPath)
@@ -239,13 +282,13 @@ void FWakaTimeForUEModule::DownloadWakatimeCli(string CliPath)
 	{
 		UE_LOG(LogWakaTime, Log, TEXT("Successfully downloaded wakatime-cli.zip"));
 		bool bSuccessUnzip = FWakaTimeHelpers::UnzipArchive(LocalZipFilePath,
-		                                                    string(GUserProfile) + "/.wakatime");
+		                                                    string(GUserProfile) + "\\.wakatime");
 
 		if (bSuccessUnzip) UE_LOG(LogWakaTime, Log, TEXT("Successfully extracted wakatime-cli."));
 	}
 	else
 	{
-		UE_LOG(LogWakaTime, Error, TEXT("Error downloading python. Please, install it manually."));
+		UE_LOG(LogWakaTime, Error, TEXT("Error downloading wakatime-cli. Please, install it manually."));
 	}
 }
 
@@ -274,7 +317,6 @@ TSharedRef<FSlateStyleSet> FWakaTimeForUEModule::CreateToolbarIcon()
 	TSharedRef<FSlateStyleSet> Style = MakeShareable(new FSlateStyleSet("WakaTime2DStyle"));
 
 	FString ResourcesDirectory = IPluginManager::Get().FindPlugin(TEXT("WakaTimeForUE"))->GetBaseDir() + "/Resources";
-	UE_LOG(LogWakaTime, Log, TEXT("%s"), *ResourcesDirectory);
 
 	Style->SetContentRoot(ResourcesDirectory);
 	Style->Set("mainIcon", new FSlateImageBrush(ResourcesDirectory + "/Icon128.png", FVector2D(40, 40),
@@ -290,6 +332,15 @@ void FWakaTimeForUEModule::AddToolbarButton(FToolBarBuilder& Builder)
 	Builder.AddToolBarButton(FWakaCommands::Get().WakaTimeSettingsCommand, NAME_None, FText::FromString("WakaTime"),
 	                         FText::FromString("WakaTime plugin settings"),
 	                         Icon, NAME_None);
+}
+
+void FWakaTimeForUEModule::OpenSettingsWindowFromUI()
+{
+	bool bFoundApiKey = false;
+	bool bFoundApiUrl = false;
+	ReadConfig(string(GUserProfile) + "\\.wakatime.cfg", bFoundApiKey, bFoundApiUrl);
+
+	OpenSettingsWindow();
 }
 
 void FWakaTimeForUEModule::OpenSettingsWindow()
@@ -318,6 +369,19 @@ void FWakaTimeForUEModule::OpenSettingsWindow()
 			  .VAlign(VAlign_Center)
 			[
 				GAPIKeyBlock
+			]
+			+ SVerticalBox::Slot()
+			.HAlign(HAlign_Left)
+			.VAlign(VAlign_Top)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(TEXT("Your api url:"))).MinDesiredWidth(500)
+			]
+			+ SVerticalBox::Slot()
+				.HAlign(HAlign_Center)
+				.VAlign(VAlign_Center)
+			[
+				GAPIUrlBlock
 			]
 		]
 		+ SVerticalBox::Slot()
@@ -349,10 +413,8 @@ void FWakaTimeForUEModule::OpenSettingsWindow()
 
 FReply FWakaTimeForUEModule::SaveData()
 {
-	UE_LOG(LogWakaTime, Log, TEXT("Saving settings"));
-
-	string APIKeyBase = TCHAR_TO_UTF8(*(GAPIKeyBlock.Get().GetText().ToString()));
-	GAPIKey = APIKeyBase.substr(APIKeyBase.find(" = ") + 1);
+	GAPIKey = TCHAR_TO_UTF8(*(GAPIKeyBlock.Get().GetText().ToString()));
+	GAPIUrl = TCHAR_TO_UTF8(*(GAPIUrlBlock.Get().GetText().ToString()));
 
 	string ConfigFileDir = string(GUserProfile) + "/.wakatime.cfg";
 	fstream ConfigFile(ConfigFileDir);
@@ -363,45 +425,49 @@ FReply FWakaTimeForUEModule::SaveData()
 		// Pozitrone(Create the file if it does not exist) and write the data in it
 		ConfigFile << "[settings]" << '\n';
 		ConfigFile << "api_key = " << GAPIKey;
+		if(!GAPIUrl.empty())
+		{
+			ConfigFile << "api_url = " << GAPIUrl;
+		}
 		ConfigFile.close();
 
 		SettingsWindow.Get().RequestDestroyWindow();
 		return FReply::Handled();
 	}
 
-	TArray<string> Data;
+	map<string, string> Data;
+	
 	string TempLine;
-	bool bFoundKey = false;
-	while (getline(ConfigFile, TempLine))
+	while (getline(ConfigFile, TempLine)) // RedKitsune(Turn entire ini file into TMap);
 	{
-		if (TempLine.find("api_key") != string::npos)
-		{
-			Data.Add("api_key = " + GAPIKey); // if key was found, add the rewritten value to the data set
-			bFoundKey = true;
-		}
-		else
-		{
-			Data.Add(TempLine); // If key was not found, add the according line to the data set
-		}
+		if(TempLine.find("[settings]") != string::npos) continue;
+
+		size_t Pos = TempLine.find(" = ");
+		string Key = TempLine.substr(0, Pos);
+		string Value = TempLine.substr(Pos + std::strlen(" = "));
+
+		Data.insert(std::make_pair(Key, Value));
 	}
 	ConfigFile.close();
 
-	if (!bFoundKey)
+	bool bIsDirty = false;
+	
+	UpdateIniEntry(bIsDirty, Data, "api_key", GAPIKey);
+	UpdateIniEntry(bIsDirty, Data, "api_url", GAPIUrl);
+	
+	if(bIsDirty)
 	{
-		// There is no key present, add it
+		UE_LOG(LogWakaTime, Log, TEXT("Saving settings"));
+		
 		ConfigFile.open(ConfigFileDir, fstream::out);
+
 		ConfigFile << "[settings]" << '\n';
-		ConfigFile << "api_key = " << GAPIKey;
-		ConfigFile.close();
-	}
-	else
-	{
-		// Rewrite the file with the new override
-		ConfigFile.open(ConfigFileDir, fstream::out);
-		for (int Index = 0; Index < Data.Num(); Index++)
+		
+		for(auto kvp : Data)
 		{
-			ConfigFile << Data[Index] << endl;
+			ConfigFile << kvp.first << " = " << kvp.second << '\n';
 		}
+
 		ConfigFile.close();
 	}
 
@@ -409,24 +475,51 @@ FReply FWakaTimeForUEModule::SaveData()
 	return FReply::Handled();
 }
 
+void FWakaTimeForUEModule::UpdateIniEntry(bool& bIsDirty, map<string, string>& Data, string Key, string Value)
+{
+	if(Value.empty())
+	{
+		if(Data.contains(Key))
+		{
+			Data.erase(Key);
+			bIsDirty =  true;
+		}
+	} else
+	{
+		if(!Data.contains(Key))
+		{
+			Data.insert(std::make_pair(Key, Value));
+			bIsDirty =  true;
+		} else if(!Data[Key].compare(Value))
+		{
+			Data[Key] = Value;
+			bIsDirty =  true;
+		}
+	}
+}
+
 // Lifecycle methods
-void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string Activity)
+void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string Activity, string EntityType, FString Entity, string Language)
 {
 	UE_LOG(LogWakaTime, Log, TEXT("Sending Heartbeat"));
 
 	string Command = GBaseCommand;
 
-	Command += " --entity \"" + GetProjectName() + "\" ";
+	Command += " --config " + string(GUserProfile) + "\\.wakatime.cfg ";
+	Command += "--log-file " + string(GUserProfile) + "\\.wakatime\\wakatime.log ";
 
-	if (GAPIKey != "")
+	if(GAPIUrl != "")
 	{
-		Command += "--key " + GAPIKey + " ";
+		Command += "--api-url " + GAPIUrl + " ";
 	}
 
 	Command += "--project \"" + GetProjectName() + "\" ";
-	Command += "--entity-type \"app\" ";
-	Command += "--language \"Unreal Engine\" ";
-	Command += "--plugin \"unreal-wakatime/1.2.5\" "; // Update this with the plugin version from .uplugin (Unreal Plugin Settings) (Avoid Hardcoding it here) TODO
+	Command += "--project-folder " + GProjectPath + " ";
+	string EntityStr = TCHAR_TO_UTF8(*Entity.Replace(TEXT("/"), TEXT("\\")));
+	Command += "--entity " + EntityStr + " ";
+	Command += "--entity-type \"" + EntityType + "\" ";
+	Command += "--language \"" + Language + "\" ";
+	Command += "--plugin \"unreal-wakatime/" + GPluginVersion + "\" ";
 	Command += "--category " + Activity + " ";
 
 	if (bFileSave)
@@ -437,7 +530,7 @@ void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string
 	bool bSuccess = false;
 	try
 	{
-		bSuccess = FWakaTimeHelpers::RunCmdCommand(Command, false, INFINITE, true);
+		bSuccess = FWakaTimeHelpers::RunPowershellCommand(Command, false, INFINITE, true);
 	}
 	catch (int Err)
 	{
@@ -459,51 +552,105 @@ void FWakaTimeForUEModule::SendHeartbeat(bool bFileSave, string FilePath, string
 // Event methods
 void FWakaTimeForUEModule::OnNewActorDropped(const TArray<UObject*>& Objects, const TArray<AActor*>& Actors)
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnDuplicateActorsEnd()
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnDeleteActorsEnd()
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnAddLevelToWorld(ULevel* Level)
 {
-	SendHeartbeat(false, GetProjectName(), "designing");
+	SendHeartbeat(false, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 
 #if ENGINE_MAJOR_VERSION == 5
 	void FWakaTimeForUEModule::OnPostSaveWorld(UWorld* World, FObjectPostSaveContext Context)
 	{
-		SendHeartbeat(true, GetProjectName(), "designing");
+		SendHeartbeat(true, "designing", "app", "Unreal Editor", "Unreal Editor");
 }
 #else
 	void FWakaTimeForUEModule::OnPostSaveWorld(uint32 SaveFlags, UWorld* World, bool bSucces)
 	{
-		SendHeartbeat(true, GetProjectName(), "designing");
+		SendHeartbeat(true, "designing", "app", "Unreal Editor", "Unreal Editor");
 	}
 #endif
 
 void FWakaTimeForUEModule::OnPostPieStarted(bool bIsSimulating)
 {
-	SendHeartbeat(false, GetProjectName(), "debugging");
+	SendHeartbeat(false, "debugging", "app", "Unreal Editor", "Unreal Editor");
 }
 
 void FWakaTimeForUEModule::OnPrePieEnded(bool bIsSimulating)
 {
-	SendHeartbeat(true, GetProjectName(), "debugging");
+	SendHeartbeat(true, "debugging", "app", "Unreal Editor", "Unreal Editor");
 }
 
-void FWakaTimeForUEModule::OnBlueprintCompiled()
+void FWakaTimeForUEModule::OnBlueprintPreCompile(UBlueprint* Blueprint)
 {
-	SendHeartbeat(true, GetProjectName(), "coding");
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+	auto Found = OpenedBPs.ContainsByPredicate([Blueprint](const TSharedRef<FString>& BPName)
+		{
+			return *BPName == Blueprint->GetName();
+		});
+	
+	if(!Found) return;
+
+	FString PackageName = Blueprint->GetOutermost()->GetName();
+	FString FilePath = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+ 
+	SendHeartbeat(true, "coding", "file", TCHAR_TO_UTF8(*FilePath), "Blueprints");
+#else
+	SendHeartbeat(true, "coding", "app", "Unreal Editor", "Blueprints");
+#endif
 }
 
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+void FWakaTimeForUEModule::OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor)
+{
+	if(!Asset->IsA<UBlueprint>()) return;
+	
+	OpenedBPs.Add(MakeShared<FString>(Asset->GetName()));
+}
+
+void FWakaTimeForUEModule::OnAssetClosed(UObject* Asset, IAssetEditorInstance* AssetEditor)
+{
+	if(!Asset->IsA<UBlueprint>()) return;
+	
+	OpenedBPs.RemoveAll([Asset](const TSharedRef<FString>& BPName)
+	{
+		return *BPName == Asset->GetName();
+	});
+}
+#endif
+
+void FWakaTimeForUEModule::OnEditorInitialized(double TimeToInitializeEditor)
+{
+	if (GEditor)
+	{
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+		if (UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		{
+			OnAssetOpenedInEditorHandle = AssetEditorSubsystem->OnAssetOpenedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetOpened);
+			OnAssetClosedInEditorHandle = AssetEditorSubsystem->OnAssetClosedInEditor().AddRaw(this, &FWakaTimeForUEModule::OnAssetClosed);
+		}
+#endif
+		
+		OnBlueprintPreCompileHandle = GEditor->OnBlueprintPreCompile().AddRaw(this, &FWakaTimeForUEModule::OnBlueprintPreCompile);
+	}
+	else
+	{
+		UE_LOG(LogWakaTime, Error, TEXT("No GEditor present"));
+	}
+
+	FEditorDelegates::OnEditorInitialized.Remove(OnEditorInitializedHandle);
+}
 
 #undef LOCTEXT_NAMESPACE
 

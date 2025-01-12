@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <map>
 #include <Runtime/SlateCore/Public/Styling/SlateStyle.h>
 #include "EditorStyleSet.h"
 
@@ -38,6 +39,12 @@ public:
 	void HandleStartupApiCheck(std::string ConfigFilePath);
 
 	/// <summary>
+	///	Checks whether the wakatime config file exists and includes the api_key
+	/// </summary>
+	/// <param name="ConfigFilePath"> Path to the config file directory</param>
+	void ReadConfig(std::string ConfigFilePath, bool& bFoundApiKey, bool& bFoundApiUrl);
+
+	/// <summary>
 	///	Checks if Wakatime exists, if not, downloads it using Powershell
 	/// </summary>
 	/// <param name="CliPath"> Path to the wakatime exe file </param>
@@ -64,7 +71,12 @@ public:
 	void AddToolbarButton(FToolBarBuilder& Builder);
 
 	/// <summary>
-	///	Called when the toolbar icon is clicked; Opens the Slate window
+	///	Called when the toolbar icon is clicked; Reads config and opens the Slate window
+	/// </summary>
+	void OpenSettingsWindowFromUI();
+	
+	/// <summary>
+	///	Opens the Slate window
 	/// </summary>
 	void OpenSettingsWindow();
 
@@ -73,6 +85,8 @@ public:
 	///	Saves the entered api key into the wakatime.cfg file
 	/// </summary>
 	FReply SaveData();
+
+	void UpdateIniEntry(bool& bIsDirty, std::map<std::string, std::string>& Data, std::string Key, std::string Value);
 
 
 	// Lifecycle methods
@@ -84,7 +98,7 @@ public:
 	/// <param name="bFileSave"> whether to attach the file that is being worked on </param>
 	/// <param name="FilePath"> path to the current file that is being edited </param>
 	/// <param name="Activity"> activity being performed by the user while sending the heartbeat; e.g. coding, designing, debugging, etc. </param>
-	void SendHeartbeat(bool bFileSave, std::string FilePath, std::string Activity);
+	void SendHeartbeat(bool bFileSave, std::string Activity, std::string EntityType, FString Entity, std::string Language);
 
 
 	// Event methods
@@ -129,11 +143,31 @@ public:
 	void OnPrePieEnded(bool bIsSimulating);
 
 	/// <summary>
-	///	Event called when blueprint is compiled
+	///	Event called prior to blueprint compiling
 	/// </summary>
-	void OnBlueprintCompiled();
+	void OnBlueprintPreCompile(UBlueprint* Blueprint);
+	
+	/// <summary>
+	///	Event called when editor window is initialized
+	/// </summary>
+	void OnEditorInitialized(double TimeToInitializeEditor);
+
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+	/// <summary>
+	///	Event called when asset window is opened
+	/// </summary>
+	void OnAssetOpened(UObject* Asset, IAssetEditorInstance* AssetEditor);
+
+	/// <summary>
+	///	Event called when asset window is closed
+	/// </summary>
+	void OnAssetClosed(UObject* Asset, IAssetEditorInstance* AssetEditor);
+#endif
 
 	TSharedPtr<FUICommandList> PluginCommands;
+#if ENGINE_MAJOR_VERSION >= 5 && ENGINE_MINOR_VERSION >= 4 // RedTheKitsune(OnAssetClosedInEditor is not available in <UE5.4, so blueprint name tracking will not work properly)
+	TArray<TSharedRef<FString>> OpenedBPs;
+#endif
 };
 
 class FWakaCommands : public TCommands<FWakaCommands>
